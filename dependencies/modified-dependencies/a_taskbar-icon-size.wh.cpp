@@ -246,6 +246,16 @@ FrameworkElement FindChildByClassName(FrameworkElement element,
         return winrt::get_class_name(child) == className;
     });
 }
+bool IsVerticalTaskbar() {
+    APPBARDATA appBarData = {
+        .cbSize = sizeof(APPBARDATA),
+    };
+    if (!SHAppBarMessage(ABM_GETTASKBARPOS, &appBarData)) {
+        Wh_Log(L"SHAppBarMessage(ABM_GETTASKBARPOS) failed");
+        return false;
+    }
+    return appBarData.uEdge == ABE_LEFT || appBarData.uEdge == ABE_RIGHT;
+}
 void OverrideResourceDirectoryLookup(
     PCSTR sourceFunctionName,
     const winrt::Windows::Foundation::IInspectable* key,
@@ -364,7 +374,7 @@ using TrayUI_GetMinSize_t = void(WINAPI*)(void* pThis,
 TrayUI_GetMinSize_t TrayUI_GetMinSize_Original;
 void WINAPI TrayUI_GetMinSize_Hook(void* pThis, HMONITOR monitor, SIZE* size) {
     TrayUI_GetMinSize_Original(pThis, monitor, size);
-    if (g_taskbarHeight) {
+    if (!IsVerticalTaskbar() && g_taskbarHeight) {
         UINT dpiX = 0;
         UINT dpiY = 0;
         GetDpiForMonitor(monitor, MDT_DEFAULT, &dpiX, &dpiY);
@@ -559,7 +569,11 @@ TaskbarConfiguration_GetIconHeightInViewPixels_method_Hook(void* pThis) {
 using TaskListButton_IconHeight_t = void(WINAPI*)(void* pThis, double height);
 TaskListButton_IconHeight_t TaskListButton_IconHeight_Original;
 size_t GetIconHeightOffset() {
-    static size_t iconHeightOffset = []() {
+    static size_t iconHeightOffset = []() -> size_t {
+        if (!TaskListButton_IconHeight_Original) {
+            Wh_Log(L"Error: TaskListButton_IconHeight_Original is null");
+            return 0;
+        }
         size_t offset =
 #if defined(_M_X64)
             OffsetFromAssemblyRegex(
@@ -590,7 +604,8 @@ SystemTrayController_GetFrameSize_t SystemTrayController_GetFrameSize_Original;
 double WINAPI SystemTrayController_GetFrameSize_Hook(void* pThis,
                                                      int enumTaskbarSize) {
     Wh_Log(L"> %d", enumTaskbarSize);
-    if (g_taskbarHeight && (enumTaskbarSize == 1 || enumTaskbarSize == 2)) {
+    if (!IsVerticalTaskbar() && g_taskbarHeight &&
+        (enumTaskbarSize == 1 || enumTaskbarSize == 2)) {
         return g_taskbarHeight;
     }
     return SystemTrayController_GetFrameSize_Original(pThis, enumTaskbarSize);
@@ -603,7 +618,8 @@ double WINAPI
 SystemTraySecondaryController_GetFrameSize_Hook(void* pThis,
                                                 int enumTaskbarSize) {
     Wh_Log(L"> %d", enumTaskbarSize);
-    if (g_taskbarHeight && (enumTaskbarSize == 1 || enumTaskbarSize == 2)) {
+    if (!IsVerticalTaskbar() && g_taskbarHeight &&
+        (enumTaskbarSize == 1 || enumTaskbarSize == 2)) {
         return g_taskbarHeight;
     }
     return SystemTraySecondaryController_GetFrameSize_Original(pThis,
@@ -619,7 +635,8 @@ double WINAPI TaskbarConfiguration_GetFrameSize_Hook(int enumTaskbarSize) {
         g_originalTaskbarHeight =
             TaskbarConfiguration_GetFrameSize_Original(enumTaskbarSize);
     }
-    if (g_taskbarHeight && (enumTaskbarSize == 1 || enumTaskbarSize == 2)) {
+    if (!IsVerticalTaskbar() && g_taskbarHeight &&
+        (enumTaskbarSize == 1 || enumTaskbarSize == 2)) {
         return g_taskbarHeight;
     }
     return TaskbarConfiguration_GetFrameSize_Original(enumTaskbarSize);
@@ -631,6 +648,12 @@ TaskbarConfiguration_UpdateFrameSize_t
     TaskbarConfiguration_UpdateFrameSize_SymbolAddress;
 LONG GetFrameSizeOffset() {
     static LONG frameSizeOffset = []() -> LONG {
+        if (!TaskbarConfiguration_UpdateFrameSize_SymbolAddress) {
+            Wh_Log(
+                L"Error: TaskbarConfiguration_UpdateFrameSize_SymbolAddress is "
+                L"null");
+            return 0;
+        }
         const DWORD* start =
             (const DWORD*)TaskbarConfiguration_UpdateFrameSize_SymbolAddress;
         const DWORD* end = start + 0x80;
@@ -682,7 +705,7 @@ void WINAPI Event_operator_call_Hook(void* pThis) {
             g_originalTaskbarHeight =
                 *g_TaskbarConfiguration_UpdateFrameSize_frameSize;
         }
-        if (g_taskbarHeight) {
+        if (!IsVerticalTaskbar() && g_taskbarHeight) {
             *g_TaskbarConfiguration_UpdateFrameSize_frameSize = g_taskbarHeight;
         }
     }
@@ -694,6 +717,12 @@ SystemTrayController_UpdateFrameSize_t
     SystemTrayController_UpdateFrameSize_SymbolAddress;
 LONG GetLastHeightOffset() {
     static LONG lastHeightOffset = []() -> LONG {
+        if (!SystemTrayController_UpdateFrameSize_SymbolAddress) {
+            Wh_Log(
+                L"Error: SystemTrayController_UpdateFrameSize_SymbolAddress is "
+                L"null");
+            return 0;
+        }
 #if defined(_M_X64)
         const BYTE* start =
             (const BYTE*)SystemTrayController_UpdateFrameSize_SymbolAddress;
@@ -760,6 +789,10 @@ void SystemTrayController_UpdateFrameSize_InitOffsets() {
 SystemTrayController_UpdateFrameSize_t
     SystemTrayController_UpdateFrameSize_Original;
 void WINAPI SystemTrayController_UpdateFrameSize_Hook(void* pThis) {
+    if (IsVerticalTaskbar()) {
+        SystemTrayController_UpdateFrameSize_Original(pThis);
+        return;
+    }
     LONG lastHeightOffset = GetLastHeightOffset();
     if (lastHeightOffset) {
         *(double*)((BYTE*)pThis + lastHeightOffset) = 0;
@@ -776,6 +809,10 @@ TaskbarFrame_MaxHeight_double_t TaskbarFrame_MaxHeight_double_Original;
 using TaskbarFrame_Height_double_t = void(WINAPI*)(void* pThis, double value);
 TaskbarFrame_Height_double_t TaskbarFrame_Height_double_Original;
 void WINAPI TaskbarFrame_Height_double_Hook(void* pThis, double value) {
+    if (IsVerticalTaskbar()) {
+        TaskbarFrame_Height_double_Original(pThis, value);
+        return;
+    }
     if (TaskbarFrame_MaxHeight_double_Original) {
         TaskbarFrame_MaxHeight_double_Original(
             pThis, std::numeric_limits<double>::infinity());
@@ -785,6 +822,12 @@ void WINAPI TaskbarFrame_Height_double_Hook(void* pThis, double value) {
 void* TaskbarController_OnGroupingModeChanged_Original;
 LONG GetTaskbarFrameOffset() {
     static LONG taskbarFrameOffset = []() -> LONG {
+        if (!TaskbarController_OnGroupingModeChanged_Original) {
+            Wh_Log(
+                L"Error: TaskbarController_OnGroupingModeChanged_Original is "
+                L"null");
+            return 0;
+        }
 #if defined(_M_X64)
         const BYTE* p =
             (const BYTE*)TaskbarController_OnGroupingModeChanged_Original;
@@ -832,6 +875,10 @@ using TaskbarController_UpdateFrameHeight_t = void(WINAPI*)(void* pThis);
 TaskbarController_UpdateFrameHeight_t
     TaskbarController_UpdateFrameHeight_Original;
 void WINAPI TaskbarController_UpdateFrameHeight_Hook(void* pThis) {
+    if (IsVerticalTaskbar()) {
+        TaskbarController_UpdateFrameHeight_Original(pThis);
+        return;
+    }
     LONG taskbarFrameOffset = GetTaskbarFrameOffset();
     if (!taskbarFrameOffset) {
         Wh_Log(L"Error: taskbarFrameOffset is invalid");
@@ -879,7 +926,7 @@ void WINAPI SystemTraySecondaryController_UpdateFrameSize_Hook(void* pThis) {
 using SystemTrayFrame_Height_t = void(WINAPI*)(void* pThis, double value);
 SystemTrayFrame_Height_t SystemTrayFrame_Height_Original;
 void WINAPI SystemTrayFrame_Height_Hook(void* pThis, double value) {
-    if (g_inSystemTrayController_UpdateFrameSize) {
+    if (!IsVerticalTaskbar() && g_inSystemTrayController_UpdateFrameSize) {
         value = std::numeric_limits<double>::quiet_NaN();
     }
     SystemTrayFrame_Height_Original(pThis, value);
@@ -1269,12 +1316,12 @@ void WINAPI RepeatButton_Width_Hook(void* pThis, double width) {
         bool widePanel = panelGrid.Width() > panelGrid.Height();
         if (widePanel) {
             auto margin = Thickness{3, 3, 3, 3};
-            if (!g_unloading && marginValue < 3) {
+            if (!g_unloading && marginValue <= 3) {
                 labelsTopBorderExtraMargin = 3 - marginValue;
                 margin.Left = marginValue;
                 margin.Top = marginValue;
-                margin.Right = marginValue;
-                margin.Bottom = marginValue;
+                margin.Right = 0;
+                margin.Bottom = 0;
             }
             Wh_Log(L"Setting Margin=%f,%f,%f,%f for panel", margin.Left,
                    margin.Top, margin.Right, margin.Bottom);
@@ -1287,14 +1334,13 @@ void WINAPI RepeatButton_Width_Hook(void* pThis, double width) {
             if (!g_unloading) {
                 margin.Left = marginValue;
                 margin.Top = marginValue;
-                margin.Right = marginValue;
-                margin.Bottom = marginValue;
+                margin.Right = 0;
+                margin.Bottom = 0;
                 if (g_taskbarHeight < 48) {
                     margin.Top -= static_cast<double>(48 - g_taskbarHeight) / 2;
                     if (margin.Top < 0) {
                         margin.Top = 0;
                     }
-                    margin.Bottom = marginValue * 2 - margin.Top;
                 }
             }
             Wh_Log(L"Setting Margin=%f,%f,%f,%f for panel", margin.Left,
@@ -1348,7 +1394,8 @@ using SHAppBarMessage_t = decltype(&SHAppBarMessage);
 SHAppBarMessage_t SHAppBarMessage_Original;
 auto WINAPI SHAppBarMessage_Hook(DWORD dwMessage, PAPPBARDATA pData) {
     auto ret = SHAppBarMessage_Original(dwMessage, pData);
-    if (dwMessage == ABM_QUERYPOS && ret && g_taskbarHeight) {
+    if (dwMessage == ABM_QUERYPOS && ret && !IsVerticalTaskbar() &&
+        g_taskbarHeight) {
         pData->rc.top =
             pData->rc.bottom -
             MulDiv(g_taskbarHeight, GetDpiForWindow(pData->hWnd), 96);
@@ -1439,7 +1486,7 @@ void ApplySettingsTBIconSize(int taskbarHeight) {
                                  GetDpiForWindow(hTaskbarWnd));
     }
     g_applyingSettings = true;
-    if (taskbarHeight == g_taskbarHeight) {
+    if (!IsVerticalTaskbar() && taskbarHeight == g_taskbarHeight) {
         g_pendingMeasureOverride = true;
         g_taskbarHeight = taskbarHeight - 1;
         if (!TaskbarConfiguration_GetFrameSize_Original &&
@@ -1466,11 +1513,15 @@ void ApplySettingsTBIconSize(int taskbarHeight) {
                          &tempTaskbarHeight, sizeof(double));
     }
     SendMessage(hTaskbarWnd, WM_SETTINGCHANGE, SPI_SETLOGICALDPIOVERRIDE, 0);
-    for (int i = 0; i < 100; i++) {
-        if (!g_pendingMeasureOverride) {
-            break;
+    if (!IsVerticalTaskbar()) {
+        for (int i = 0; i < 100; i++) {
+            if (!g_pendingMeasureOverride) {
+                break;
+            }
+            Sleep(100);
         }
-        Sleep(100);
+    } else {
+        g_pendingMeasureOverride = false;
     }
     HWND hReBarWindow32 =
         FindWindowEx(hTaskbarWnd, nullptr, L"ReBarWindow32", nullptr);

@@ -5,6 +5,7 @@ import re
 
 from art import *
 
+# 初始定义（后续会被主函数覆盖）
 mod_parts_dir = "mod-parts"
 hooks_dir = os.path.join(mod_parts_dir, "hooks")
 
@@ -83,7 +84,7 @@ class URLProcessor(ABC):
         content = re.sub(r"Wh_ModAfterInit\(\)", r"Wh_ModAfterInit" + self.name + "()", content, flags=re.DOTALL)
         content = re.sub(r"Wh_ModBeforeUninit\(\)", r"Wh_ModBeforeUninit" + self.name + "()", content, flags=re.DOTALL)
         content = re.sub(r"Wh_ModUninit\(\)", r"Wh_ModUninit" + self.name + "()", content, flags=re.DOTALL)
-        content = re.sub(r"Wh_ModSettingsChanged\(\)", r"Wh_ModSettingsChanged" + self.name + "()", content, flags=re.DOTALL)
+        content = re.sub(r"\bWh_ModSettingsChanged\b", "Wh_ModSettingsChanged" + self.name, content)
         content = re.sub(r"g_taskbarViewDllLoaded", r"g_taskbarViewDllLoaded" + self.name, content, flags=re.DOTALL)
         content = self.format_content(content)
         content = re.sub(r"^\s+//\s.*?$", "\n", content, flags=re.DOTALL | re.MULTILINE)
@@ -101,8 +102,9 @@ class URLProcessor(ABC):
 ######################################################################
 
 class TaskbarIconSizeMod(URLProcessor):
-    def __init__(self):
-        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/refs/heads/main/mods/taskbar-icon-size.wh.cpp"
+    def __init__(self, hash_sha: str = "refs/heads/main"):
+        base_url_template = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/{}/mods/taskbar-icon-size.wh.cpp"
+        url = base_url_template.format(hash_sha)
         super().__init__(url, "TBIconSize", "a")
 
     def format_content(self, content):
@@ -167,8 +169,9 @@ void LoadSettingsTBIconSize() {
 
 
 class StartButtonPosition(URLProcessor):
-    def __init__(self):
-        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/refs/heads/main/mods/taskbar-start-button-position.wh.cpp"
+    def __init__(self, hash_sha: str = "refs/heads/main"):
+        base_url_template = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/{}/mods/taskbar-start-button-position.wh.cpp"
+        url = base_url_template.format(hash_sha)
         super().__init__(url, "StartButtonPosition", "b")
 
     def format_content(self, content):
@@ -178,6 +181,8 @@ class StartButtonPosition(URLProcessor):
         content = re.sub(r"} g_settings_startbuttonposition;", ";bool MoveFlyoutNotificationCenter=true;} g_settings_startbuttonposition;", content, flags=re.DOTALL)
 
         content = re.sub(r"HRESULT WINAPI IUIElement_Arrange_Hook", "HRESULT WINAPI IUIElement_Arrange_Hook_" + self.name, content, flags=re.DOTALL)
+        arrange_hook_pattern = fr"IUIElement_Arrange_Hook(?!_{re.escape(self.name)})"
+        content = re.sub(arrange_hook_pattern, "IUIElement_Arrange_Hook_" + self.name, content, flags=re.DOTALL)
         content = re.sub(r"std::wstring processFileName = GetProcessFileName\(processId\);",
                          "TCHAR className[256];GetClassName(hwnd, className, 256);std::wstring windowClassName(className);\nstd::wstring processFileName = GetProcessFileName(processId);\nWh_Log(L\"process: %s, windowClassName: %s\",processFileName.c_str(),windowClassName.c_str());", content,
                          flags=re.MULTILINE | re.DOTALL)
@@ -278,7 +283,8 @@ SetWindowPos""", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"HWND FindCurrentProcessTaskbarWnd\(.*?(?:^}$)", "", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"AugmentedEntryPointButton_UpdateButtonPadding_t[\s\w\d]*?AugmentedEntryPointButton_UpdateButtonPadding_Original;", "", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"AugmentedEntryPointButton_UpdateButtonPadding_Hook", "AugmentedEntryPointButton_UpdateButtonPadding_Hook_" + self.name, content, flags=re.MULTILINE | re.DOTALL)
-        content = re.sub(r"HookTaskbarViewDllSymbols", "HookTaskbarViewDllSymbols" + self.name, content, flags=re.MULTILINE | re.DOTALL)
+        pattern = fr"HookTaskbarDllSymbols(?!{re.escape(self.name)})"
+        content = re.sub(pattern, "HookTaskbarDllSymbols" + self.name, content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"HMODULE GetTaskbarViewModuleHandle\(.*?(?:^}$)", "", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"LoadLibraryExW_t LoadLibraryExW_Original;", "", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"LoadLibraryExW_Hook", "LoadLibraryExW_Hook_" + self.name, content, flags=re.MULTILINE | re.DOTALL)
@@ -316,15 +322,51 @@ std::wstring monitorName = GetMonitorName(hWnd);
                          content, flags=re.DOTALL | re.MULTILINE)
         content = re.sub(r"void Wh_ModUninitStartButtonPosition\(\) {", "void Wh_ModUninitStartButtonPosition() {if(true)return;", content, flags=re.MULTILINE | re.DOTALL)
 
+        content = content.replace(
+            "ExperienceToggleButton_UpdateButtonPadding_t\n    ExperienceToggleButton_UpdateButtonPadding_Original;",
+            "ExperienceToggleButton_UpdateButtonPadding_t\n    ExperienceToggleButton_UpdateButtonPadding_Original_StartButtonPosition;"
+        )
+        content = content.replace(
+            "void WINAPI ExperienceToggleButton_UpdateButtonPadding_Hook(void* pThis) {",
+            "void WINAPI ExperienceToggleButton_UpdateButtonPadding_Hook_StartButtonPosition(void* pThis) {"
+        )
+        content = content.replace(
+            "&ExperienceToggleButton_UpdateButtonPadding_Original,\n            ExperienceToggleButton_UpdateButtonPadding_Hook,",
+            "&ExperienceToggleButton_UpdateButtonPadding_Original_StartButtonPosition,\n            ExperienceToggleButton_UpdateButtonPadding_Hook_StartButtonPosition,"
+        )
+
         # hooks
         content = re.sub(r"WindhawkUtils::SYMBOL_HOOK taskbarDllHooks\[\] = \{", fr"WindhawkUtils::SYMBOL_HOOK taskbarDllHooks[] = {{{read_file(os.path.join(hooks_dir, 'taskbar.dll_sigs.cpp'))}", content, flags=re.MULTILINE | re.DOTALL)
         content = re.sub(r"WindhawkUtils::SYMBOL_HOOK symbolHooks\[\] = \{", fr"WindhawkUtils::SYMBOL_HOOK symbolHooks[] = {{{read_file(os.path.join(hooks_dir, 'Taskbar.View.dll_sigs.cpp'))}", content, flags=re.MULTILINE | re.DOTALL)
 
-        content = re.sub(r"bool HookTaskbarDllSymbolsStartButtonPosition\(\) \{", fr"""{read_file(os.path.join(hooks_dir, "taskbar.dll_methods.cpp"))}
-bool HookTaskbarDllSymbolsStartButtonPosition() {{""", content, flags=re.MULTILINE | re.DOTALL)
+        content = re.sub(
+            r"bool HookTaskbarDllSymbolsStartButtonPosition\(\) \{",
+            fr"""{read_file(os.path.join(hooks_dir, "taskbar.dll_methods.cpp"))}
+bool HookTaskbarDllSymbolsStartButtonPosition() {{""",
+            content,
+            flags=re.MULTILINE | re.DOTALL
+        )
 
-        content = re.sub(r"bool HookTaskbarViewDllSymbolsStartButtonPosition\(HMODULE module\) \{", fr"""{read_file(os.path.join(hooks_dir, "Taskbar.View.dll_methods.cpp"))}
-bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module) {{""", content, flags=re.MULTILINE | re.DOTALL)
+        content = re.sub(
+            r"bool HookTaskbarViewDllSymbols\(HMODULE module\) \{",
+            fr"""{read_file(os.path.join(hooks_dir, "Taskbar.View.dll_methods.cpp"))}
+bool HookTaskbarViewDllSymbolsStartButtonPosition(HMODULE module) {{""",
+            content,
+            flags=re.MULTILINE | re.DOTALL
+        )
+
+        content = re.sub(
+            r"BOOL Wh_ModSettingsChangedStartButtonPosition\(BOOL\* bReload\)",
+            "BOOL Wh_ModSettingsChangedStartButtonPosition()",
+            content,
+            flags=re.MULTILINE | re.DOTALL
+        )
+        content = re.sub(
+            r"Wh_ModSettingsChangedStartButtonPosition\(BOOL\* bReload\)",
+            "Wh_ModSettingsChangedStartButtonPosition()",
+            content,
+            flags=re.MULTILINE | re.DOTALL
+        )
 
         content = re.sub(r"Wh_GetIntSetting\(L\"startMenuOnTheLeft\"\);", """Wh_GetIntSetting(L\"MoveFlyoutStartMenu\");
 g_settings_startbuttonposition.MoveFlyoutNotificationCenter = Wh_GetIntSetting(L"MoveFlyoutNotificationCenter");
@@ -338,8 +380,9 @@ g_settings_startbuttonposition.MoveFlyoutNotificationCenter = Wh_GetIntSetting(L
 ######################################################################
 
 class TaskbarStylerMod(URLProcessor):
-    def __init__(self):
-        url = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/refs/heads/main/mods/windows-11-taskbar-styler.wh.cpp"
+    def __init__(self, hash_sha: str = "refs/heads/main"):
+        base_url_template = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/{}/mods/windows-11-taskbar-styler.wh.cpp"
+        url = base_url_template.format(hash_sha)
         super().__init__(url, "BlurBrush", "c")
 
     def format_content(self, content):
@@ -360,17 +403,24 @@ def generate_mod_art():
 
 def process_all_mods():
     generate_mod_art()
-    processors = [
-        TaskbarIconSizeMod(),
-        StartButtonPosition(),
-        # TaskbarStylerMod()
+    mods = [
+        TaskbarIconSizeMod(hash_sha="c4d4cec"),
+        StartButtonPosition(hash_sha="862ba36"),
+        # TaskbarStylerMod(hash_sha="423d961"), 
     ]
 
-    for processor in processors:
-        processor.process()
+    for m in mods:
+        try:
+            print(f"Processing: {m.name} \n  | download links: {m.url}")
+            m.process()
+        except Exception as e:
+            print(f"Failed processing {m.name}: {e}")
 
 
 if __name__ == "__main__":
-    mod_parts_dir = r"C:\Users\bbwi\Documents\GitHub\windhawk-taskbar-centered-condensed\mod-parts"
+    script_path = os.path.abspath(__file__)
+    script_dir = os.path.dirname(script_path)
+    mod_parts_dir = os.path.normpath(os.path.join(script_dir, "..", "mod-parts"))
     hooks_dir = os.path.join(mod_parts_dir, "hooks")
+    
     process_all_mods()

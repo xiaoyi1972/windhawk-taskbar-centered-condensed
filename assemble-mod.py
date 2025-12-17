@@ -138,7 +138,12 @@ def main(major_minor="1.4"):
     header_contents = header_contents.replace('{version_code}', version)
 
     merged_contents = header_contents + "\n\n"
-    for cpp_file_path in glob.glob(os.path.join(dependencies_dir_path, '*.cpp')):
+    dependency_files = sorted(
+        path
+        for path in glob.glob(os.path.join(dependencies_dir_path, '*.cpp'))
+        if '-modified' not in os.path.basename(path)
+    )
+    for cpp_file_path in dependency_files:
         with open(cpp_file_path, 'r', encoding='utf-8') as f:
             cpp_contents = f.read()
             merged_contents += f"{cpp_contents}\n\n"
@@ -163,6 +168,10 @@ def main(major_minor="1.4"):
     merged_contents = re.sub(r'\n+', '\n', merged_contents).strip()
     merged_contents = merged_contents.replace("LoadLibrary(L", "GetModuleHandle(L")
     merged_contents = merged_contents.replace(") {", ") {\n  Wh_Log(L\".\");")
+    merged_contents = merged_contents.replace(
+        "WindhawkUtils::Wh_SetFunctionHookT",
+        "WindhawkUtils::SetFunctionHook",
+    )
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(merged_contents)
 
