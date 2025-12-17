@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 import os
 import requests
 import re
+import subprocess
 
 from art import *
 
@@ -52,6 +53,9 @@ class URLProcessor(ABC):
             self.output_folder = os.path.join("dependencies", "modified-dependencies")
 
         os.makedirs(self.output_folder, exist_ok=True)
+        self.repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), os.pardir))
+        self.patch_file = None
 
     @abstractmethod
     def format_content(self, content):
@@ -70,6 +74,7 @@ class URLProcessor(ABC):
         with open(filepath, "w", encoding="utf-8") as file:
             file.write(content)
         print(f"Saved: {filepath}")
+        return filepath
 
     def process(self):
         content = self.download()
@@ -97,6 +102,23 @@ class URLProcessor(ABC):
         filename = self.url.split("/")[-1] or "output.mod"
 
         self.save(content, filename)
+        self.apply_patch()
+
+    def apply_patch(self):
+        if not self.patch_file:
+            return
+        patch_path = os.path.join(self.repo_root, self.patch_file)
+        if not os.path.exists(patch_path):
+            return
+        try:
+            subprocess.run([
+                "git",
+                "apply",
+                patch_path,
+            ], cwd=self.repo_root, check=True)
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Failed to apply patch {patch_path}: {exc}") from exc
 
 
 ######################################################################
@@ -106,6 +128,7 @@ class TaskbarIconSizeMod(URLProcessor):
         base_url_template = "https://raw.githubusercontent.com/ramensoftware/windhawk-mods/{}/mods/taskbar-icon-size.wh.cpp"
         url = base_url_template.format(hash_sha)
         super().__init__(url, "TBIconSize", "a")
+        self.patch_file = os.path.join("dependencies", "patches", "a_taskbar-icon-size.patch")
 
     def format_content(self, content):
         content = re.sub(r'Wh_GetIntSetting\(L\"IconSize\"\)', 'Wh_GetIntSetting(L"TaskbarIconSize")', content, flags=re.DOTALL)
@@ -161,6 +184,36 @@ void LoadSettingsTBIconSize() {
   g_settings_tbiconsize.taskbarButtonWidth = value;
 }
     """, content, flags=re.DOTALL)
+
+        pattern = r"#if defined\(_M_X64\)\s+const BYTE\* start =\s*\r?\n\s+\(const BYTE\*\)SystemTrayController_UpdateFrameSize_SymbolAddress;\s+const BYTE\* end = start \+ 0x200;\s+"
+        replacement = r"""#if defined(_M_X64)
+        {
+            const std::regex regexMovsdLoad(R"(movsd\s+xmm\d+,\s*qword ptr \[rcx\+0x([0-9a-f]+)\])", std::regex_constants::icase);
+            size_t candidate = OffsetFromAssemblyRegex((void*)SystemTrayController_UpdateFrameSize_SymbolAddress, 0, regexMovsdLoad, 128);
+            if (candidate) {
+                LONG offsetValue = static_cast<LONG>(candidate);
+                if (offsetValue <= 0xFFFF) {
+                    Wh_Log(L"lastHeightOffset=0x%X", offsetValue);
+                    return offsetValue;
+                }
+            }
+        }
+        {
+            const std::regex regexMovsdStore(R"(movsd\s+qword ptr \[rcx\+0x([0-9a-f]+)\],\s*xmm\d+)", std::regex_constants::icase);
+            size_t candidate = OffsetFromAssemblyRegex((void*)SystemTrayController_UpdateFrameSize_SymbolAddress, 0, regexMovsdStore, 128);
+            if (candidate) {
+                LONG offsetValue = static_cast<LONG>(candidate);
+                if (offsetValue <= 0xFFFF) {
+                    Wh_Log(L"lastHeightOffset=0x%X", offsetValue);
+                    return offsetValue;
+                }
+            }
+        }
+        const BYTE* start =
+            (const BYTE*)SystemTrayController_UpdateFrameSize_SymbolAddress;
+        const BYTE* end = start + 0x200;
+"""
+        content = re.sub(pattern, lambda _: replacement, content, flags=re.MULTILINE)
 
         return content
 
